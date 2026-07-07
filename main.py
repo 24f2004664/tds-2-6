@@ -17,21 +17,53 @@ WINDOW = 10
 rate_buckets = {}
 
 
-# Middleware 2: strict CORS
+# -----------------------------
+# CORS Middleware
+# -----------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         ALLOWED_ORIGIN
     ],
+    # allows the exam verification page too
+    allow_origin_regex=r"https://.*\.example\.com",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# Middleware 3: rate limiter
+# -----------------------------
+# Request Context Middleware
+# -----------------------------
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+
+    incoming_id = request.headers.get("X-Request-ID")
+
+    if incoming_id:
+        request_id = incoming_id
+    else:
+        request_id = str(uuid.uuid4())
+
+    request.state.request_id = request_id
+
+    response = await call_next(request)
+
+    response.headers["X-Request-ID"] = request_id
+
+    return response
+
+
+# -----------------------------
+# Rate Limit Middleware
+# -----------------------------
 @app.middleware("http")
 async def rate_limit(request: Request, call_next):
+
+    # don't rate-limit CORS checks
+    if request.method == "OPTIONS":
+        return await call_next(request)
 
     client_id = request.headers.get(
         "X-Client-Id",
@@ -45,6 +77,7 @@ async def rate_limit(request: Request, call_next):
         []
     )
 
+    # remove old requests
     bucket[:] = [
         t for t in bucket
         if now - t < WINDOW
@@ -63,28 +96,9 @@ async def rate_limit(request: Request, call_next):
     return await call_next(request)
 
 
-
-# Middleware 1: request context
-@app.middleware("http")
-async def request_context(request: Request, call_next):
-
-    request_id = request.headers.get(
-        "X-Request-ID"
-    )
-
-    if not request_id:
-        request_id = str(uuid.uuid4())
-
-    request.state.request_id = request_id
-
-    response = await call_next(request)
-
-    response.headers["X-Request-ID"] = request_id
-
-    return response
-
-
-
+# -----------------------------
+# Routes
+# -----------------------------
 @app.get("/")
 def home():
     return {
